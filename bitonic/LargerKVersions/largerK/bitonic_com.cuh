@@ -7,10 +7,9 @@
 #include <cmath>
 #include "wtime.h" 
 // #define _MONITOR_ 0
+namespace drtopk_bitonic {
 static void HandleError( cudaError_t err, const char *file, int line   ) {
     if (err != cudaSuccess) {
-        printf( "\n%s in %s at line %d\n", \
-                cudaGetErrorString( err   ), file, line );
         exit( EXIT_FAILURE   );
     }
 }
@@ -76,23 +75,18 @@ __global__ void CreateConcatenateRange(data_t* vec,data_t* ConcatenatedRange,ind
     int myWarpID=thid >> 5;
     int NWarps=(blockDim.x*gridDim.x) >> 5;
     int NContributingSubrange=k; //for single maximum selection it will be k . For beta selection, the number is likely to be less than k
-    // printf("Concatenated size: %d",ConcatenatedSize);
     while (myWarpID < NContributingSubrange)//
     {
         index_t mybegin_pos=(myWarpID*Subrangesize)+laneId;
         index_t myend_pos=(((myWarpID+1)*Subrangesize) < ConcatenatedSize) ? (myWarpID+1)*Subrangesize : ConcatenatedSize;
         index_t index=SubrangeId[myWarpID];
-        printf("SubrangeId[]:%d\n ",index);
         index_t myvec_pos=index* Subrangesize+laneId;
         while (mybegin_pos<myend_pos)
         {
             if (mybegin_pos >= ConcatenatedSize)
             {
-                printf("Error! Illegal memory access. \n");
             }
-            // printf("ConcatenatedSize: %d\n",ConcatenatedSize);
             
-            // printf("mybegin_pos: %d\t",mybegin_pos);
             ConcatenatedRange[mybegin_pos]=vec[myvec_pos];
             mybegin_pos+=32; 
             myvec_pos+=32;
@@ -229,7 +223,6 @@ __global__ void Combined_Sigmod_Merge(data_t* vec,index_t N,index_t top,index_t*
         __syncthreads(); //newly added OCT 10
 
     }
-    // printf("Returning abnormal way! :(\n");
 
 }
 
@@ -390,7 +383,6 @@ __global__ void Combined_Sigmod_Merge_firstTopK(data_t* vec,index_t N,index_t to
         __syncthreads(); //newly added OCT 10
 
     }
-    // printf("Returning abnormal way! :(\n");
 
 }
     template<typename data_t, typename index_t>
@@ -621,14 +613,12 @@ __global__ void Combined_Sigmod_MergeRebuild(data_t* vec,index_t N,index_t top,i
 void bitonic_firstTopk(data_t* vec1_d,index_t num_element,index_t k,index_t Subrangesize,index_t originalNum,index_t* SubrangeId_d,data_t* originalvec_d,data_t* ConcatenatedRange_d)
 {
 
-    cout<<"------Starting Bitonic TopK(First TopK)-------"<<endl;
     int BlockSize=64;
 //	int NBlocks=32;
 	int NBlocks=32;
 	// int NBlocks=64;
     //  int NBlocks=num_element/(8*BlockSize);
     int Ssize;
-    cout<<"Size of(data_t)"<<sizeof(data_t)<<endl;
     if (k>BlockSize)//k is less than block dimension
     {
         BlockSize=k;
@@ -649,14 +639,10 @@ void bitonic_firstTopk(data_t* vec1_d,index_t num_element,index_t k,index_t Subr
   
     if (num_element < Ssize)
     {
-        cout<<"NElements per block is less than NElements. Reducing Number of elemenrs per block to Number of Elements."<<endl;//possibility for optimizing workload distribution --> divide Ssize elemnts into many blocks
         Ssize=num_element;
     }
-    cout<<"Shared Memory Size per block"<<(Ssize*sizeof(data_t)+Ssize*sizeof(index_t))/1024<<"KB"<<endl;;
     if ((Ssize*sizeof(data_t)+Ssize*sizeof(index_t))/1024>=64)
     {
-        cout<<"Size of(data_t)"<<sizeof(data_t)<<endl;
-        cout<<"SMem size exceeded"<<endl;
         // exit(-1);
     }
     data_t* temp_d;
@@ -671,7 +657,6 @@ void bitonic_firstTopk(data_t* vec1_d,index_t num_element,index_t k,index_t Subr
     int loop=0;
     while(num_element>k)
     {
-        cout<<endl<<"Inside loop:"<<loop<<endl;
         Combined_Sigmod_MergeRebuild_firstTopk<data_t,index_t> <<<NBlocks,BlockSize>>>(vec1_d,num_element,k,SubrangeId_d,Ssize,temp_d,tempSubrangeId_d,Array);  
         H_ERR(cudaDeviceSynchronize());   
         num_element =num_element >> 1;
@@ -683,19 +668,14 @@ void bitonic_firstTopk(data_t* vec1_d,index_t num_element,index_t k,index_t Subr
     H_ERR(cudaFree(SMem_global_d));
     H_ERR(cudaFree(SMem_global_INDEXd));
     index_t ConcatenatedSize=k*Subrangesize;
-    cout<<"ConcatenatedSize: "<<ConcatenatedSize<<endl;
-    cout<<"Original number:"<<originalNum<<endl;
-    cout<<endl;
     CreateConcatenateRange<data_t,index_t><<<512,512>>>(originalvec_d,ConcatenatedRange_d,SubrangeId_d,ConcatenatedSize,k,Subrangesize);
     H_ERR(cudaDeviceSynchronize());
-    cout<<endl<<endl;
     return;
 } 
 
     template<typename data_t, typename index_t>
-void bitonic(data_t* vec1_d,index_t num_element,index_t k,data_t& TopKElement,index_t Subrangesize,data_t* originalvec,index_t originalNum,index_t* SubrangeId_d,data_t* originalvec_d,data_t* ConcatenatedRange_d)
+void bitonic(data_t* &vec1_d,index_t num_element,index_t k,data_t& TopKElement,index_t Subrangesize,data_t* originalvec,index_t originalNum,index_t* SubrangeId_d,data_t* originalvec_d,data_t* ConcatenatedRange_d)
 {
-    cout<<"------Starting Second Bitonic TopK-------"<<endl;
     // int BlockSize=64;
     int BlockSize=64;
     //   int NBlocks=num_element/(8*BlockSize);
@@ -703,7 +683,6 @@ void bitonic(data_t* vec1_d,index_t num_element,index_t k,data_t& TopKElement,in
     // int NBlocks=32; 
 	// int NBlocks=16; 
     int Ssize;
-    cout<<"Size of(data_t)"<<sizeof(data_t)<<endl;
     if (k>BlockSize)//k is less than block dimension
     {
         BlockSize=k;
@@ -719,14 +698,10 @@ void bitonic(data_t* vec1_d,index_t num_element,index_t k,data_t& TopKElement,in
 
     if (num_element < Ssize)
     {
-        cout<<"NElements per block is less than NElements. Reducing Number of elemenrs per block to Number of Elements."<<endl;//possibility for optimizing workload distribution --> divide Ssize elemnts into many blocks
         Ssize=num_element;
     }
-    cout<<"Shared Memory Size per block"<<Ssize*sizeof(data_t)/1024<<"KB"<<endl;;
     if (Ssize*sizeof(data_t)/1024>=64)
     {
-        cout<<"Size of(data_t)"<<sizeof(data_t)<<endl;
-        cout<<"SMem size exceeded for Shared memory"<<endl;
         // exit(-1);
     }
     data_t* temp_d;
@@ -738,7 +713,6 @@ void bitonic(data_t* vec1_d,index_t num_element,index_t k,data_t& TopKElement,in
     int loop=0;
     while(num_element>k)
     {
-        cout<<endl<<"Inside loop:"<<loop<<endl;
         Combined_Sigmod_MergeRebuild<data_t,index_t> <<<NBlocks,BlockSize>>>(vec1_d,num_element,k,SubrangeId_d,Ssize,temp_d,SMem_global_d);  
         H_ERR(cudaDeviceSynchronize());    
         num_element =num_element >> 1;
@@ -747,19 +721,51 @@ void bitonic(data_t* vec1_d,index_t num_element,index_t k,data_t& TopKElement,in
     }
     assert(k==num_element);
  #ifdef _MONITOR_
-  cout<<"The top K elements"<<endl;
-  cout<<"Normal sorting the original vector for testing"<<endl;
   sort(originalvec, originalvec + originalNum, std::greater<data_t>());
-  cout<<"Normal sorting of original vector for testing finished!"<<endl;
   data_t* vec1=(data_t*)malloc(sizeof(data_t)*num_element);
   H_ERR(cudaMemcpy(vec1,vec1_d,sizeof(data_t)*num_element,cudaMemcpyDeviceToHost));
   for (index_t i=0;i<num_element;i++)
   {
-         cout<<i<<":"<<originalvec[k-i-1]<<" ";
-      cout<<vec1[i]<<"   ";
     //   assert(vec1[i]==originalvec[k-i-1]);
   }
  #endif
-   cout<<endl<<endl;
     return;
+}
+    template<typename data_t,typename index_t>
+__global__ void sampleMax (data_t* A,data_t* SubRangeMax, index_t N,index_t NSubranges,index_t SubRangeSize,const index_t alpha,index_t* SubrangeId,int Nthreadstowork)
+{	
+
+    int thid = blockDim.x*blockIdx.x+threadIdx.x;
+    int laneId= threadIdx.x & 0x1f;
+    int myWarpID=thid >> 5;
+    int NWarps=(blockDim.x*gridDim.x) >> 5;
+    while (myWarpID < NSubranges)//WarpID is used as subrange ID
+    {
+        index_t mybegin_pos=(myWarpID<<alpha)+laneId;
+        index_t myend_pos=(((myWarpID+1)<<alpha) < (N)) ? ((myWarpID+1)<<alpha):N;
+        data_t Max=0;//Assigning all the threads Max reads to 0 intially. Avoids the illegal memory access for Max=A[mybegin_pos]; condition
+
+        while(mybegin_pos < myend_pos)
+        {
+            Max=(Max < A[mybegin_pos]) ? A[mybegin_pos]:Max;
+            mybegin_pos+=32;
+        }
+        data_t MaxFromOther;
+        for (int j=Nthreadstowork >> 1;j >=1;j=j>>1)
+        {
+            MaxFromOther=__shfl_sync(0xffffffff, Max,laneId+j,32/*Nthreadstowork*//*32*/);
+            if (laneId<j)
+            {
+                Max= (MaxFromOther > Max) ? MaxFromOther : Max ;
+            }            
+        }
+        if(laneId==0)
+        {
+            SubRangeMax[myWarpID]=Max;
+            SubrangeId[myWarpID]=myWarpID;
+        }
+        myWarpID+=NWarps;
+    }
+    return;
+}
 }

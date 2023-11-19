@@ -6,8 +6,12 @@
 #include "wtime.h"
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include <cuda/std/limits>
 #include <assert.h>
 #include <fstream>
+
+
+namespace drtopk_radix {
 
 const int blocksize=128;
 const int gridsize=128;
@@ -19,13 +23,33 @@ using namespace std;
 
 static void HandleError( cudaError_t err, const char *file, int line   ) {
 	if (err != cudaSuccess) {
-		printf( "\n%s in %s at line %d\n", \
-				cudaGetErrorString( err   ), file, line );
 		exit( EXIT_FAILURE   );
 	}
 }
 #define H_ERR( err   ) \
 	(HandleError( err, __FILE__, __LINE__   ))
+
+ template <typename T>
+    __forceinline__  __host__ __device__ unsigned int get_bits(T f);
+
+template<>
+    __forceinline__  __host__ __device__  unsigned int get_bits(float f)
+    {
+
+        unsigned int mask;
+		unsigned int * f_ptr=reinterpret_cast<unsigned int*>(&f);
+		unsigned int u_f= *f_ptr;
+        //memcpy(&u_f, &f, sizeof(u_f));
+        mask = -int(u_f >> 31) | 0x80000000;
+        u_f ^= mask;
+        return u_f;
+    }
+
+template<>
+__forceinline__  __host__ __device__ unsigned int get_bits(unsigned int f)
+{
+    return f;
+}
 
 
 template<typename data_t, typename index_t>
@@ -189,7 +213,8 @@ void Max_Min(data_t& max,data_t& min,data_t* vec_d,index_t num_element)
 }
 
 	template<typename data_t, typename index_t>
-void CumulateCount_inplace(index_t* Count,index_t* CumCount,index_t num_bucket,index_t& Kdigit,index_t k,index_t num_element,index_t Belowcount,data_t& flag, int NBitsperDigit,int Currentdigit)
+void CumulateCount_inplace(index_t* Count,index_t* CumCount,index_t num_bucket,index_t& Kdigit,index_t k,index_t num_element,
+index_t Belowcount,unsigned int & flag, int NBitsperDigit,int Currentdigit)
 {
 	index_t sum=Belowcount;// the cumulation starts from the elemens which are pushed away from the smallest bucket to the dummy smaller bucket
 	index_t shiftleft=Currentdigit*NBitsperDigit;
@@ -203,7 +228,7 @@ void CumulateCount_inplace(index_t* Count,index_t* CumCount,index_t num_bucket,i
 			if ((CumCount[i] >= (num_element-k+1)) &&  (CumCount[i-1]< (num_element-k+1)))
 			{
 				Kdigit=i;
-				flag=flag|((data_t)i<<shiftleft);
+				flag=flag|((unsigned int)i<<shiftleft);
 
 			}
 		}
@@ -212,7 +237,7 @@ void CumulateCount_inplace(index_t* Count,index_t* CumCount,index_t num_bucket,i
 			if (CumCount[i] >= (num_element-k+1))
 			{
 				Kdigit=i;
-				flag=flag|((data_t)i<<shiftleft);
+				flag=flag|((unsigned int)i<<shiftleft);
 			}
 		}
 	}
@@ -349,8 +374,9 @@ __global__ void AssignMaxMin(data_t* vec_d,index_t num_element,index_t* Count_d,
 		atomicAdd(BelowCount,Below_Count[0]);
 }
 
-	template<typename data_t, typename index_t>
-__global__ void CalculateOccurence_inplace(data_t* vec,index_t num_element,index_t* Count,int NBitsperDigit,int CurrentDigit,int num_bucket,data_t flag, int shiftleft,int shiftRight)
+template<typename data_t, typename index_t>
+__global__ void CalculateOccurence_inplace(const data_t* vec, data_t* out, int k, index_t num_element,index_t* Count,int NBitsperDigit,
+int CurrentDigit,int num_bucket, unsigned int flag, int shiftleft,int shiftRight)
 
 {
 	extern __shared__ index_t SMem_Count[];//The size is number of buckets
@@ -360,13 +386,13 @@ __global__ void CalculateOccurence_inplace(data_t* vec,index_t num_element,index
 
 	index_t mybegin=blockIdx.x*blockDim.x+threadIdx.x;
 
-	data_t mask=num_bucket-1;
+	unsigned int mask=num_bucket-1;
 	while(mybegin < num_element)
 	{
-		data_t value=vec[mybegin];
+		unsigned int value=get_bits(vec[mybegin]);
 		if (((value>>shiftleft)<<shiftleft)==flag)//The value falls within the bucket
 		{
-			data_t temp=value>>shiftRight;
+			unsigned int temp=value>>shiftRight;
 			temp=temp&mask;
 			atomicAdd(&SMem_Count[temp],1);
 		}
@@ -376,6 +402,12 @@ __global__ void CalculateOccurence_inplace(data_t* vec,index_t num_element,index
 	for (int i = threadIdx.x; i < num_bucket; i += blockDim.x) 
 	{
 		atomicAdd(&Count[i],SMem_Count[i]);
+	}
+
+	if(CurrentDigit==0){
+		for(int i=blockIdx.x*blockDim.x+threadIdx.x; i<k;i+=blockDim.x*gridDim.x){
+			out[i]=cuda::std::numeric_limits<data_t>::max();
+		}
 	}
 }
 
@@ -1892,3 +1924,4 @@ void sample_radix_select(data_t* vec_d,index_t num_element,index_t k,index_t num
 	timeForsecondTopK=wtime()-startSecondTopK;
 	//           radix_select_inplace<data_t,index_t>(ConcatenatedRange_d,ConcatenatedSize,k,num_bucket,TopKElement,NBits,CurrentDigit);   
 }
+}  // namespace drtopk_radix
